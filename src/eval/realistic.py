@@ -47,8 +47,17 @@ def run_realistic(
     click.echo("  REALISTIC EVALUATION (multi-turn conversation)")
     click.echo(f"{'='*60}\n")
 
+    # Pre-flight cleanup: delete the test table if it exists from a previous run
+    click.echo("  🧹 Pre-flight cleanup...")
+    try:
+        mcp.call_tool("delete_table", {"tablename": "crb16_evalrealistic", "hasUserApproved": True})
+        click.echo("    Deleted leftover table from previous run")
+        time.sleep(30)  # Wait for deletion to propagate
+    except Exception:
+        click.echo("    No leftover table found (clean start)")
+
     # Run steps one at a time (maintaining conversation state), with propagation waits
-    click.echo(f"  Running {len(steps)} steps in a single conversation...\n")
+    click.echo(f"\n  Running {len(steps)} steps in a single conversation...\n")
 
     # We'll manage conversation manually to insert waits between steps
     messages: list[dict[str, Any]] = []
