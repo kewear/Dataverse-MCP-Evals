@@ -1,0 +1,118 @@
+# Realistic evaluation scenarios — natural language, no hints.
+# Tests how the agent handles real user requests without explicit tool/logical-name guidance.
+#
+# Differences from BVT (scenarios.yaml):
+# - Prompts use display names and natural language (like a real user)
+# - No logical name hints (agent must discover or infer)
+# - Multi-turn conversation mode: steps run in sequence sharing context
+# - Postcondition validators verify actual state via direct MCP calls
+# - Scoring is binary task-completion (not tool-level checks)
+
+mode: conversation  # All steps run in one agent conversation
+
+steps:
+  # --- LIFECYCLE: Create → Use → Update → Delete ---
+
+  - id: create-table
+    prompt: >
+      Create a table called EvalRealistic with three columns:
+      Title (text), Priority (integer), and IsCompleted (yes/no).
+    postcondition:
+      tool: describe
+      args:
+        path: "tables/crb16_evalrealistic"
+      expect_contains:
+        - "crb16_title"
+        - "crb16_priority"
+        - "crb16_iscompleted"
+    propagation_wait: 30  # Wait for table to be queryable
+    success_criteria:
+      - "The agent should create a table with the requested columns"
+
+  - id: create-record
+    prompt: >
+      Add a record to the EvalRealistic table with Title 'Test Item',
+      Priority 1, and IsCompleted set to no.
+    postcondition:
+      tool: read_query
+      args:
+        querytext: "SELECT crb16_title, crb16_priority, crb16_iscompleted FROM crb16_evalrealistic WHERE crb16_title = 'Test Item'"
+      expect_contains:
+        - "Test Item"
+    success_criteria:
+      - "The agent should create the record with the specified values"
+
+  - id: fetch-record
+    prompt: >
+      Find the record in EvalRealistic where the title is 'Test Item'
+      and show me all its fields.
+    postcondition: null  # Read-only — just check agent response
+    success_criteria:
+      - "The response should contain 'Test Item'"
+      - "The response should mention Priority or IsCompleted values"
+
+  - id: update-record
+    prompt: >
+      Mark the 'Test Item' record in EvalRealistic as completed.
+    postcondition:
+      tool: read_query
+      args:
+        querytext: "SELECT crb16_iscompleted FROM crb16_evalrealistic WHERE crb16_title = 'Test Item'"
+      expect_contains:
+        - "true"
+    success_criteria:
+      - "The agent should update the IsCompleted field"
+
+  - id: search-table
+    prompt: >
+      Search for the EvalRealistic table and tell me what columns it has.
+    postcondition: null  # Read-only
+    success_criteria:
+      - "The response should mention EvalRealistic or evalrealistic"
+      - "The response should list columns like Title, Priority, or IsCompleted"
+
+  - id: delete-record
+    prompt: >
+      Delete the 'Test Item' record from EvalRealistic.
+    postcondition:
+      tool: read_query
+      args:
+        querytext: "SELECT crb16_title FROM crb16_evalrealistic WHERE crb16_title = 'Test Item'"
+      expect_contains: []  # Empty result = record deleted
+      expect_empty: true
+    success_criteria:
+      - "The agent should delete the record"
+
+  - id: delete-table
+    prompt: >
+      Delete the EvalRealistic table. I approve the deletion.
+    postcondition:
+      tool: describe
+      args:
+        path: "tables/crb16_evalrealistic"
+      expect_error: true  # Table should not exist
+    success_criteria:
+      - "The agent should delete the table"
+
+  # --- EXISTING TABLE TEST (no propagation issue) ---
+
+  - id: query-existing-table
+    prompt: >
+      Find all accounts in Dataverse and show me their names.
+    postcondition: null
+    success_criteria:
+      - "The response should list account names"
+      - "The agent should use a query or search tool"
+
+# --- PROPAGATION MEASUREMENT ---
+# Not an agent test — direct MCP client polling after table creation.
+# Measures time until newly created table appears in search.
+
+propagation_test:
+  description: "Measure time-to-discoverable for newly created table"
+  search_terms:
+    - "EvalRealistic"           # display name
+    - "crb16_evalrealistic"     # logical name
+  poll_interval_seconds: 30
+  timeout_seconds: 1200         # 20 minutes max
+  depends_on: create-table      # Only runs after table is created

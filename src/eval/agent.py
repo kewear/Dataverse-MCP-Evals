@@ -55,14 +55,7 @@ class Agent:
         )
 
     def run(self, prompt: str, system_prompt: str = SYSTEM_PROMPT) -> ConversationTrace:
-        """Run the agent with a prompt and return the full conversation trace.
-
-        The agent will:
-        1. Send the prompt to the LLM with available MCP tools
-        2. If the LLM requests tool calls, execute them via MCP
-        3. Feed tool results back to the LLM
-        4. Repeat until the LLM produces a final text response or max rounds reached
-        """
+        """Run the agent with a single prompt and return the conversation trace."""
         start = time.perf_counter()
         trace = ConversationTrace()
 
@@ -72,7 +65,55 @@ class Agent:
         ]
         trace.messages.append({"role": "user", "content": prompt})
 
+        self._run_loop(messages, trace)
+        trace.total_duration_ms = (time.perf_counter() - start) * 1000
+        return trace
+
+    def run_conversation(
+        self,
+        prompts: list[str],
+        system_prompt: str = SYSTEM_PROMPT,
+        _existing_messages: list[dict[str, Any]] | None = None,
+    ) -> list[ConversationTrace]:
+        """Run multiple prompts in a single conversation (shared context).
+
+        Each prompt builds on the previous conversation state, so the agent
+        can reference prior tool outputs naturally. Returns a trace per step.
+
+        If _existing_messages is provided, continues from that conversation state
+        (and mutates it in place so the caller keeps the updated state).
+        """
+        if _existing_messages is not None:
+            messages = _existing_messages
+        else:
+            messages = [
+                {"role": "system", "content": system_prompt},
+            ]
         tools = self.mcp_client.get_openai_tools()
+        traces: list[ConversationTrace] = []
+
+        for prompt in prompts:
+            start = time.perf_counter()
+            trace = ConversationTrace()
+
+            messages.append({"role": "user", "content": prompt})
+            trace.messages.append({"role": "user", "content": prompt})
+
+            self._run_loop(messages, trace, tools=tools)
+            trace.total_duration_ms = (time.perf_counter() - start) * 1000
+            traces.append(trace)
+
+        return traces
+
+    def _run_loop(
+        self,
+        messages: list[dict[str, Any]],
+        trace: ConversationTrace,
+        tools: list[dict] | None = None,
+    ) -> None:
+        """Core agent loop — call LLM, execute tools, repeat until final response."""
+        if tools is None:
+            tools = self.mcp_client.get_openai_tools()
 
         for round_num in range(self.max_tool_rounds):
             logger.info("Agent round %d", round_num + 1)
@@ -91,6 +132,7 @@ class Agent:
                 final_text = message.content or ""
                 trace.final_response = final_text
                 trace.messages.append({"role": "assistant", "content": final_text})
+                messages.append({"role": "assistant", "content": final_text})
                 break
 
             # Process tool calls
@@ -145,6 +187,3 @@ class Agent:
             # Max rounds reached
             trace.final_response = "(Max tool rounds reached without final response)"
             logger.warning("Agent reached max tool rounds (%d)", self.max_tool_rounds)
-
-        trace.total_duration_ms = (time.perf_counter() - start) * 1000
-        return trace

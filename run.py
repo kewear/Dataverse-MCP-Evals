@@ -489,6 +489,37 @@ def status():
         click.echo(f"  {key}: {value}")
 
 
+@cli.command()
+def realistic():
+    """Run realistic evaluation (multi-turn conversation, natural language, postconditions)."""
+    _setup_logging(False)
+    mcp, agent, evaluator, state = _create_components()
+
+    from eval.realistic import run_realistic
+    results = run_realistic(agent, mcp, evaluator)
+
+    json_file, html_file = _save_results(results)
+    click.echo(f"\nResults: {json_file}")
+    click.echo(f"Report:  {html_file}")
+
+
+@cli.command()
+def propagation():
+    """Measure propagation timing (how long until a new table is searchable)."""
+    _setup_logging(False)
+    mcp, agent, evaluator, state = _create_components()
+
+    from eval.realistic import run_propagation_test
+    results = run_propagation_test(mcp)
+
+    # Save propagation results
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    out_file = RESULTS_DIR / f"propagation_{timestamp}.json"
+    out_file.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    click.echo(f"\nResults saved: {out_file}")
+
+
 def main():
     cli()
 
