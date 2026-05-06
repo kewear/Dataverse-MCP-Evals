@@ -1,0 +1,181 @@
+# Scenario Definitions for Dataverse MCP Server Evaluation
+# Each scenario defines a prompt, expected tools, and success criteria.
+
+scenarios:
+  # ──────────────────────────────────────────────
+  # CRUD Lifecycle (Scenarios 1-5)
+  # ──────────────────────────────────────────────
+
+  - id: create-table
+    name: "Create table"
+    stage: setup
+    prompt: >
+      Create a table called EvalProjects with the following columns:
+      Name (text, required), Status (text), and DueDate (datetime).
+    expected_tools:
+      - create_table
+    expected_tool_params:
+      tablename_contains: "EvalProjects"
+    success_criteria:
+      - "The agent should call the create_table tool"
+      - "The table name should contain 'EvalProjects'"
+      - "The agent should confirm the table was created"
+
+  - id: create-record
+    name: "Create record"
+    stage: setup
+    depends_on: create-table
+    prompt: >
+      Create a record in the EvalProjects table with
+      Name: 'MCP Eval Test', Status: 'Active', DueDate: '2026-12-31'.
+    expected_tools:
+      - create_record
+    expected_tool_params:
+      tablename_contains: "EvalProjects"
+    success_criteria:
+      - "The agent should call the create_record tool"
+      - "The agent should confirm the record was created"
+      - "A record ID should be returned"
+
+  - id: fetch-record
+    name: "Fetch record"
+    stage: verify
+    depends_on: create-record
+    prompt: >
+      Fetch the details of the record in EvalProjects table that has
+      the name 'MCP Eval Test'.
+    expected_tools:
+      - fetch
+    success_criteria:
+      - "The agent should call the fetch tool or read_query tool"
+      - "The response should contain 'MCP Eval Test'"
+      - "The response should include Status and DueDate fields"
+
+  - id: delete-record
+    name: "Delete record"
+    stage: teardown
+    depends_on: create-record
+    prompt: >
+      Delete the record named 'MCP Eval Test' from the EvalProjects table.
+    expected_tools:
+      - delete_record
+    success_criteria:
+      - "The agent should call the delete_record tool"
+      - "The agent should confirm the record was deleted"
+
+  - id: delete-table
+    name: "Delete table"
+    stage: teardown
+    depends_on: delete-record
+    prompt: >
+      Delete the EvalProjects table from Dataverse.
+    expected_tools:
+      - delete_table
+    success_criteria:
+      - "The agent should call the delete_table tool"
+      - "The agent should confirm the table was deleted"
+
+  # ──────────────────────────────────────────────
+  # Search & List (Scenarios 6-9)
+  # ──────────────────────────────────────────────
+
+  - id: list-tables
+    name: "List all tables"
+    stage: verify
+    prompt: >
+      List all tables in Dataverse.
+    expected_tools:
+      - list_tables
+    success_criteria:
+      - "The agent should call the list_tables tool"
+      - "The response should contain a list of table names"
+
+  - id: search-generic
+    name: "Search (search tool)"
+    stage: verify
+    prompt: >
+      Search for account tables in Dataverse.
+    expected_tools:
+      - search
+    success_criteria:
+      - "The agent should call the search tool"
+      - "The response should return search results"
+      - "The results should be relevant to 'account'"
+
+  - id: search-records
+    name: "Search records (search_data tool)"
+    stage: verify
+    prompt: >
+      Find all accounts named Contoso in Dataverse.
+    expected_tools:
+      - search
+    success_criteria:
+      - "The agent should call a search or query tool"
+      - "The response should return matching records"
+
+  - id: create-table-and-search
+    name: "Create table + search"
+    stage: verify
+    depends_on: create-table
+    prompt: >
+      Search for the EvalProjects table in Dataverse and verify it exists.
+    expected_tools:
+      - search
+    success_criteria:
+      - "The agent should call the search or list_tables tool"
+      - "The response should show EvalProjects exists"
+
+  # ──────────────────────────────────────────────
+  # Skills (Scenarios 10-13)
+  # ──────────────────────────────────────────────
+
+  - id: create-skill
+    name: "Create skill"
+    stage: setup
+    prompt: >
+      Create a skill called 'EvalJokeTeller' that tells a funny joke
+      about Copilot when invoked. The skill description should be
+      'Tells a joke about GitHub Copilot'.
+    expected_tools:
+      - create_record
+    expected_tool_params:
+      skill_name: "EvalJokeTeller"
+    success_criteria:
+      - "The agent should create a skill record"
+      - "The skill should be named 'EvalJokeTeller'"
+      - "The agent should confirm the skill was created"
+
+  - id: list-skills
+    name: "List all skills"
+    stage: verify
+    depends_on: create-skill
+    prompt: >
+      List all skills available in Dataverse.
+    expected_tools:
+      - list_tables
+    success_criteria:
+      - "The agent should list or search for skills"
+      - "The response should include skill entries"
+
+  - id: follow-skill
+    name: "Follow a skill"
+    stage: verify
+    depends_on: create-skill
+    prompt: >
+      Tell me a joke about Copilot using the EvalJokeTeller skill.
+    expected_tools: []
+    success_criteria:
+      - "The agent should use the EvalJokeTeller skill"
+      - "The response should contain a joke about Copilot"
+
+  - id: delete-skill
+    name: "Delete skill"
+    stage: teardown
+    depends_on: create-skill
+    prompt: >
+      Delete the skill named 'EvalJokeTeller' from Dataverse.
+    expected_tools:
+      - delete_record
+    success_criteria:
+      - "The agent should delete the skill"
+      - "The agent should confirm the skill was deleted"

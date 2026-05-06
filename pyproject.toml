@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dataverse-mcp-eval"
+version = "0.1.0"
+description = "Evaluation framework for Dataverse MCP Server using Azure AI Foundry"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.30.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.5.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "click>=8.1.0",
+]
+
+[project.optional-dependencies]
+foundry = [
+    "azure-ai-evaluation>=1.0.0",
+    "azure-ai-projects>=1.0.0",
+    "azure-identity>=1.15.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+dv-eval = "eval.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "stage_setup: marks tests that create resources",
+    "stage_verify: marks tests that verify resources exist",
+    "stage_teardown: marks tests that clean up resources",
+]
