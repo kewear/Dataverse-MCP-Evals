@@ -56,13 +56,15 @@ def mcp_client() -> MCPClient:
 @pytest.fixture(scope="session")
 def agent(mcp_client: MCPClient) -> Agent:
     """Shared LLM agent for the test session."""
-    github_token = os.environ["GITHUB_TOKEN"]
-    model = os.environ.get("GITHUB_MODELS_MODEL", "gpt-4o")
+    azure_endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
+    api_key = os.environ["AZURE_OPENAI_API_KEY"]
+    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
 
     return Agent(
         mcp_client=mcp_client,
-        github_token=github_token,
-        model=model,
+        azure_endpoint=azure_endpoint,
+        api_key=api_key,
+        deployment=deployment,
     )
 
 

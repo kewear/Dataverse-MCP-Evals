@@ -9,11 +9,20 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from .models import ConversationTrace, EvalScore, Scenario
 
 logger = logging.getLogger(__name__)
+
+# Minimum scores required for each critical evaluator to pass
+CRITICAL_THRESHOLDS: dict[str, float] = {
+    "tool_call_check": 0.7,
+    "tool_param_check": 0.7,
+    "success_criteria": 0.7,
+    "response_content": 1.0,  # All expected strings must be present
+}
 
 # Optional Azure AI Foundry imports
 try:
@@ -72,7 +81,11 @@ class MCPEvaluator:
         # 3. Success criteria (custom text matching)
         scores.append(self._eval_success_criteria(scenario, trace))
 
-        # 4. Azure AI Foundry ToolCallAccuracy (if available)
+        # 4. Response content validation (concrete string checks against tool responses)
+        if scenario.expected_response_contains:
+            scores.append(self._eval_response_content(scenario, trace))
+
+        # 5. Azure AI Foundry ToolCallAccuracy (if available)
         if self._tool_call_evaluator and scenario.expected_tools:
             foundry_score = self._eval_foundry_tool_accuracy(scenario, trace)
             if foundry_score:
@@ -81,8 +94,12 @@ class MCPEvaluator:
         return scores
 
     def _eval_tool_calls(self, scenario: Scenario, trace: ConversationTrace) -> EvalScore:
-        """Check that the expected MCP tools were called."""
-        if not scenario.expected_tools:
+        """Check that the expected MCP tools were called.
+
+        A scenario passes if ANY of the expected_tools OR acceptable_tools were called.
+        expected_tools are the ideal tools; acceptable_tools are valid alternatives.
+        """
+        if not scenario.expected_tools and not scenario.acceptable_tools:
             return EvalScore(
                 evaluator="tool_call_check",
                 score=1.0,
@@ -92,24 +109,34 @@ class MCPEvaluator:
 
         called_tools = {tc.tool_name for tc in trace.tool_calls}
         expected = set(scenario.expected_tools)
+        acceptable = set(scenario.acceptable_tools)
+        all_valid = expected | acceptable
 
-        # Check if at least one expected tool was called
-        matched = called_tools & expected
-        missing = expected - called_tools
+        matched = called_tools & all_valid
+        matched_expected = called_tools & expected
 
-        if missing:
+        if not matched:
             return EvalScore(
                 evaluator="tool_call_check",
-                score=len(matched) / len(expected),
+                score=0.0,
                 passed=False,
-                reasoning=f"Missing tool calls: {missing}. Called: {called_tools}",
+                reasoning=f"No valid tools called. Expected: {expected}. Acceptable: {acceptable}. Called: {called_tools}",
+            )
+
+        # Full score if an expected tool was used, partial if only acceptable
+        if matched_expected:
+            return EvalScore(
+                evaluator="tool_call_check",
+                score=1.0,
+                passed=True,
+                reasoning=f"Expected tools called: {matched_expected}",
             )
 
         return EvalScore(
             evaluator="tool_call_check",
-            score=1.0,
+            score=0.8,
             passed=True,
-            reasoning=f"All expected tools called: {matched}",
+            reasoning=f"Acceptable alternative tools used: {matched & acceptable}. Ideal: {expected}",
         )
 
     def _eval_tool_params(self, scenario: Scenario, trace: ConversationTrace) -> EvalScore:
@@ -154,6 +181,59 @@ class MCPEvaluator:
             reasoning="All expected parameters found in tool calls",
         )
 
+    def _eval_response_content(self, scenario: Scenario, trace: ConversationTrace) -> EvalScore:
+        """Validate that expected strings appear in tool responses (not just the LLM summary).
+
+        This is a concrete, verifiable check — each string in expected_response_contains
+        must appear (case-insensitive) in the actual tool response data.
+        Also fails if any tool response indicates an execution error.
+        """
+        expected = scenario.expected_response_contains
+        if not expected:
+            return EvalScore(
+                evaluator="response_content",
+                score=1.0,
+                passed=True,
+                reasoning="No expected response content defined",
+            )
+
+        # Build searchable text from tool responses only (not the LLM's final answer)
+        # Use only successful responses (skip errored ones where the agent self-corrected)
+        tool_response_text = ""
+        for tc in trace.tool_calls:
+            if tc.response is not None:
+                resp_str = _flatten_response(tc.response)
+                # Skip responses that are clearly errors (agent may retry)
+                if "tool execution failed" in resp_str.lower() and isinstance(tc.response, dict) and tc.response.get("isError"):
+                    continue
+                tool_response_text += " " + resp_str
+        tool_response_text_lower = tool_response_text.lower()
+
+        # If ALL tool responses were errors, use the full text for matching (will likely fail)
+        if not tool_response_text.strip():
+            for tc in trace.tool_calls:
+                if tc.response is not None:
+                    tool_response_text += " " + _flatten_response(tc.response)
+            tool_response_text_lower = tool_response_text.lower()
+
+        found = []
+        missing = []
+        for term in expected:
+            if term.lower() in tool_response_text_lower:
+                found.append(term)
+            else:
+                missing.append(term)
+
+        score = len(found) / len(expected) if expected else 1.0
+        details = [f"✓ Found: '{t}'" for t in found] + [f"✗ Missing: '{t}'" for t in missing]
+
+        return EvalScore(
+            evaluator="response_content",
+            score=score,
+            passed=score >= CRITICAL_THRESHOLDS.get("response_content", 1.0),
+            reasoning="\n".join(details),
+        )
+
     def _eval_success_criteria(self, scenario: Scenario, trace: ConversationTrace) -> EvalScore:
         """Evaluate success criteria against the trace.
 
@@ -180,35 +260,36 @@ class MCPEvaluator:
         total = len(scenario.success_criteria)
         details = []
 
+        # Combine expected + acceptable tools for "should call" checks
+        all_valid_tools = set(scenario.expected_tools) | set(scenario.acceptable_tools)
+
         for criterion in scenario.success_criteria:
             criterion_lower = criterion.lower()
-
-            # Extract key terms from the criterion for matching
             passed = False
 
-            # Check if expected tool was called
-            if "should call" in criterion_lower:
-                for tool_name in scenario.expected_tools:
+            # Check if an expected/acceptable tool was called
+            if "should call" in criterion_lower or "should use" in criterion_lower:
+                for tool_name in all_valid_tools:
                     if tool_name in searchable:
                         passed = True
                         break
-                if not scenario.expected_tools and trace.tool_calls:
+                if not all_valid_tools and trace.tool_calls:
                     passed = True
 
             # Check for confirmation language
             elif "confirm" in criterion_lower:
-                confirm_words = ["created", "deleted", "removed", "success", "done", "complete"]
+                confirm_words = ["created", "deleted", "removed", "success", "done",
+                                 "complete", "found", "exists", "returned"]
                 passed = any(w in searchable for w in confirm_words)
 
-            # Check for content presence
+            # Check for content presence — require quoted terms if present
             elif "contain" in criterion_lower or "include" in criterion_lower or "should" in criterion_lower:
-                # Look for quoted terms in the criterion
-                import re
                 quoted = re.findall(r"'([^']+)'", criterion)
                 if quoted:
-                    passed = any(q.lower() in searchable for q in quoted)
+                    passed = all(q.lower() in searchable for q in quoted)
                 else:
-                    passed = True  # Generic criterion, assume met if we got a response
+                    # No quoted terms — check if there's meaningful tool response data
+                    passed = bool(trace.tool_calls and any(tc.response for tc in trace.tool_calls))
 
             # Check for returned data
             elif "return" in criterion_lower:
@@ -225,10 +306,11 @@ class MCPEvaluator:
                 details.append(f"✗ {criterion}")
 
         score = met / total if total > 0 else 1.0
+        threshold = CRITICAL_THRESHOLDS.get("success_criteria", 0.7)
         return EvalScore(
             evaluator="success_criteria",
             score=score,
-            passed=score >= 0.5,
+            passed=score >= threshold,
             reasoning="\n".join(details),
         )
 
@@ -272,10 +354,21 @@ class MCPEvaluator:
             )
 
 
+def _flatten_response(response: Any) -> str:
+    """Recursively extract all string values from a tool response."""
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        return " ".join(_flatten_response(v) for v in response.values())
+    if isinstance(response, list):
+        return " ".join(_flatten_response(item) for item in response)
+    return str(response)
+
+
 def compute_overall_pass(scores: list[EvalScore]) -> bool:
-    """A scenario passes if all critical evaluators pass."""
-    critical = ["tool_call_check", "success_criteria"]
+    """A scenario passes if all critical evaluators meet their thresholds."""
     for score in scores:
-        if score.evaluator in critical and not score.passed:
+        threshold = CRITICAL_THRESHOLDS.get(score.evaluator)
+        if threshold is not None and score.score < threshold:
             return False
     return True

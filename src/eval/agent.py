@@ -1,4 +1,4 @@
-"""LLM Agent with MCP tool calling via GitHub Models API."""
+"""LLM Agent with MCP tool calling via Azure AI Foundry."""
 
 from __future__ import annotations
 
@@ -26,24 +26,31 @@ If a tool call fails, report the error clearly.
 class Agent:
     """LLM agent that uses MCP tools to interact with Dataverse.
 
-    Uses the OpenAI SDK pointed at GitHub Models API for inference,
+    Uses the OpenAI SDK with Azure AI Foundry v1 endpoint for inference,
     and routes tool calls through the MCP client.
     """
 
     def __init__(
         self,
         mcp_client: MCPClient,
-        github_token: str,
-        model: str = "gpt-4o",
-        base_url: str = "https://models.inference.ai.azure.com",
+        azure_endpoint: str,
+        api_key: str,
+        deployment: str = "gpt-4.1",
         max_tool_rounds: int = 10,
     ):
         self.mcp_client = mcp_client
-        self.model = model
+        self.model = deployment
         self.max_tool_rounds = max_tool_rounds
 
+        base = azure_endpoint.rstrip("/")
+        # If the endpoint already includes /openai/v1, use it as-is
+        if base.endswith("/openai/v1"):
+            base_url = base
+        else:
+            base_url = f"{base}/openai/v1"
+
         self._openai = OpenAI(
-            api_key=github_token,
+            api_key=api_key,
             base_url=base_url,
         )
 

@@ -1,14 +1,14 @@
 # Dataverse MCP Server Evaluation Framework
 
-Automated evaluation framework for testing the Dataverse MCP server using Azure AI Foundry evaluators and an LLM agent powered by GitHub Models.
+Automated evaluation framework for testing the Dataverse MCP server using Azure AI Foundry evaluators and an LLM agent powered by Azure OpenAI.
 
 ## Quick Start
 
 ### Prerequisites
 - Python 3.10+
-- GitHub Enterprise token (for GitHub Models API)
+- Azure OpenAI resource with API key (via Azure AI Foundry)
 - Azure AI Foundry project (for evaluation)
-- Access to the Dataverse MCP server
+- Access to the Dataverse MCP server (may be in a separate tenant)
 
 ### Setup
 
@@ -26,11 +26,12 @@ cp .env.example .env
 
 | Variable | Description |
 |----------|-------------|
-| `GITHUB_TOKEN` | GitHub PAT with Models API access |
-| `MCP_SERVER_URL` | Dataverse MCP server URL |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint (e.g. `https://your-resource.openai.azure.com`) |
+| `AZURE_OPENAI_API_KEY` | API key for Azure OpenAI |
+| `AZURE_OPENAI_DEPLOYMENT` | Deployment name (default: `gpt-4.1`) |
+| `MCP_SERVER_URL` | Dataverse MCP server URL (can be in a different tenant) |
 | `MCP_AUTH_TOKEN` | Bearer token for MCP server authentication |
-| `AZURE_AI_CONNECTION_STRING` | Azure AI Foundry project connection string |
-| `GITHUB_MODELS_MODEL` | Model to use (default: `gpt-4o`) |
+| `AZURE_AI_CONNECTION_STRING` | Azure AI Foundry project connection string (optional) |
 
 ### Running Evaluations
 
@@ -67,7 +68,7 @@ pytest tests/test_skills.py
 ## Architecture
 
 ```
-LLM Agent (GPT-4o via GitHub Models)
+LLM Agent (GPT-4o via Azure AI Foundry)
     │
     ├── Sends prompts from scenarios.yaml
     ├── Receives tool call requests

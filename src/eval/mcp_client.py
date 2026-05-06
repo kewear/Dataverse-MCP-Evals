@@ -5,11 +5,24 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Methods that are safe to retry (idempotent / read-only)
+_RETRYABLE_METHODS = frozenset({
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+})
+
+# HTTP status codes worth retrying (transient errors only, NOT 401/403)
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [1, 2, 4]  # seconds
 
 
 class MCPClient:
@@ -20,17 +33,24 @@ class MCPClient:
     - POST to the MCP endpoint with JSON-RPC 2.0 messages
     """
 
-    def __init__(self, server_url: str, auth_token: str | None = None, timeout: float = 120.0):
+    def __init__(
+        self,
+        server_url: str,
+        auth_token: str | None = None,
+        token_provider: Callable[[], str] | None = None,
+        timeout: float = 120.0,
+    ):
         self.server_url = server_url.rstrip("/")
         self.timeout = timeout
         self._tools: list[dict[str, Any]] = []
         self._request_id = 0
+        self._token_provider = token_provider
 
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
-        if auth_token:
+        if auth_token and not token_provider:
             headers["Authorization"] = f"Bearer {auth_token}"
 
         self._client = httpx.Client(headers=headers, timeout=timeout)
@@ -53,26 +73,68 @@ class MCPClient:
         headers = {}
         if self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
+        # Refresh token on every request if a provider is available
+        if self._token_provider:
+            headers["Authorization"] = f"Bearer {self._token_provider()}"
 
         logger.debug("MCP request: %s %s", method, json.dumps(params or {})[:200])
 
-        response = self._client.post(self.server_url, json=payload, headers=headers)
+        retryable = method in _RETRYABLE_METHODS
+        last_error: Exception | None = None
 
-        # Capture session ID from response headers
-        if "Mcp-Session-Id" in response.headers:
-            self._session_id = response.headers["Mcp-Session-Id"]
+        attempts = _MAX_RETRIES if retryable else 1
+        for attempt in range(attempts):
+            try:
+                response = self._client.post(self.server_url, json=payload, headers=headers)
 
-        response.raise_for_status()
+                # Capture session ID from response headers
+                if "Mcp-Session-Id" in response.headers:
+                    self._session_id = response.headers["Mcp-Session-Id"]
 
-        # Handle SSE responses
-        content_type = response.headers.get("content-type", "")
-        if "text/event-stream" in content_type:
-            return self._parse_sse_response(response.text)
+                if response.status_code >= 400:
+                    logger.error("HTTP %d — %s", response.status_code, response.text[:500])
 
-        result = response.json()
-        if "error" in result:
-            raise MCPError(result["error"].get("message", "Unknown MCP error"), result["error"])
-        return result.get("result")
+                    # Retry only transient errors on idempotent methods
+                    if retryable and response.status_code in _RETRYABLE_STATUS_CODES and attempt < attempts - 1:
+                        wait = _RETRY_BACKOFF[attempt]
+                        logger.warning("Retrying %s in %ds (attempt %d/%d)", method, wait, attempt + 1, attempts)
+                        time.sleep(wait)
+                        continue
+
+                response.raise_for_status()
+
+                # Handle SSE responses
+                content_type = response.headers.get("content-type", "")
+                if "text/event-stream" in content_type:
+                    return self._parse_sse_response(response.text)
+
+                result = response.json()
+                if "error" in result:
+                    raise MCPError(result["error"].get("message", "Unknown MCP error"), result["error"])
+                return result.get("result")
+
+            except httpx.HTTPStatusError:
+                raise  # Already logged, don't wrap
+            except httpx.TimeoutException as e:
+                last_error = e
+                if retryable and attempt < attempts - 1:
+                    wait = _RETRY_BACKOFF[attempt]
+                    logger.warning("Timeout on %s, retrying in %ds (attempt %d/%d)", method, wait, attempt + 1, attempts)
+                    time.sleep(wait)
+                    continue
+                raise
+            except httpx.RequestError as e:
+                last_error = e
+                if retryable and attempt < attempts - 1:
+                    wait = _RETRY_BACKOFF[attempt]
+                    logger.warning("Network error on %s, retrying in %ds (attempt %d/%d)", method, wait, attempt + 1, attempts)
+                    time.sleep(wait)
+                    continue
+                raise
+
+        # Should not reach here, but just in case
+        if last_error:
+            raise last_error
 
     def _parse_sse_response(self, sse_text: str) -> Any:
         """Parse Server-Sent Events response to extract JSON-RPC result."""

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -14,6 +14,13 @@ class Stage(str, Enum):
     SETUP = "setup"
     VERIFY = "verify"
     TEARDOWN = "teardown"
+
+
+class ResultStatus(str, Enum):
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"
 
 
 class ToolCallTrace(BaseModel):
@@ -42,8 +49,10 @@ class Scenario(BaseModel):
     name: str
     prompt: str
     expected_tools: list[str] = Field(default_factory=list)
+    acceptable_tools: list[str] = Field(default_factory=list)
     expected_tool_params: dict[str, Any] = Field(default_factory=dict)
     success_criteria: list[str] = Field(default_factory=list)
+    expected_response_contains: list[str] = Field(default_factory=list)
     stage: Stage
     depends_on: str | None = None
 
@@ -63,9 +72,10 @@ class ScenarioResult(BaseModel):
     scenario_id: str
     scenario_name: str
     stage: Stage
-    trace: ConversationTrace
+    status: ResultStatus = ResultStatus.FAILED
+    trace: ConversationTrace | None = None
     scores: list[EvalScore] = Field(default_factory=list)
     passed: bool = False
     error: str | None = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     state_captured: dict[str, Any] = Field(default_factory=dict)
