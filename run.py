@@ -341,20 +341,18 @@ def _run_with_propagation_retry(
     return result  # Return last attempt's result
 
 
-def _save_results(results: list[ScenarioResult]) -> tuple[Path, Path]:
-    """Save results to JSON and generate HTML report."""
+def _save_results(results: list[ScenarioResult]) -> Path:
+    """Save combined HTML report with embedded JSON (single shareable file)."""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
-    json_file = RESULTS_DIR / f"results_{timestamp}.json"
     data = [r.model_dump(mode="json") for r in results]
     json_str = json.dumps(data, indent=2, default=str)
-    json_file.write_text(json_str, encoding="utf-8")
 
     html_file = RESULTS_DIR / f"report_{timestamp}.html"
     generate_html_report(results, html_file, json_data=json_str)
 
-    return json_file, html_file
+    return html_file
 
 
 def _print_summary(results: list[ScenarioResult]) -> None:
@@ -401,9 +399,9 @@ def setup():
     mcp, agent, evaluator, state = _create_components()
     try:
         results = _run_scenarios(scenarios, Stage.SETUP, agent, evaluator, state)
-        json_file, html_file = _save_results(results)
+        html_file = _save_results(results)
         _print_summary(results)
-        click.echo(f"Results: {json_file}")
+
         click.echo(f"Report:  {html_file}")
     finally:
         mcp.close()
@@ -416,9 +414,9 @@ def verify():
     mcp, agent, evaluator, state = _create_components()
     try:
         results = _run_scenarios(scenarios, Stage.VERIFY, agent, evaluator, state)
-        json_file, html_file = _save_results(results)
+        html_file = _save_results(results)
         _print_summary(results)
-        click.echo(f"Results: {json_file}")
+
         click.echo(f"Report:  {html_file}")
     finally:
         mcp.close()
@@ -431,9 +429,9 @@ def teardown():
     mcp, agent, evaluator, state = _create_components()
     try:
         results = _run_scenarios(scenarios, Stage.TEARDOWN, agent, evaluator, state)
-        json_file, html_file = _save_results(results)
+        html_file = _save_results(results)
         _print_summary(results)
-        click.echo(f"Results: {json_file}")
+
         click.echo(f"Report:  {html_file}")
     finally:
         mcp.close()
@@ -467,9 +465,9 @@ def run_all(wait: int):
         results = _run_scenarios(scenarios, Stage.TEARDOWN, agent, evaluator, state, status_map)
         all_results.extend(results)
 
-        json_file, html_file = _save_results(all_results)
+        html_file = _save_results(all_results)
         _print_summary(all_results)
-        click.echo(f"Results: {json_file}")
+
         click.echo(f"Report:  {html_file}")
 
     finally:
@@ -498,8 +496,8 @@ def realistic():
     from eval.realistic import run_realistic
     results = run_realistic(agent, mcp, evaluator)
 
-    json_file, html_file = _save_results(results)
-    click.echo(f"\nResults: {json_file}")
+    html_file = _save_results(results)
+
     click.echo(f"Report:  {html_file}")
 
 
