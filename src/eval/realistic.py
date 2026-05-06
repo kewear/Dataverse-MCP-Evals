@@ -121,7 +121,10 @@ def run_realistic(
 
 
 def _check_postcondition(step: dict, mcp: MCPClient) -> EvalScore | None:
-    """Run a direct MCP call to verify the actual state after agent action."""
+    """Run a direct MCP call to verify the actual state after agent action.
+
+    Retries up to 3 times with 10s waits to handle propagation delays.
+    """
     postcondition = step.get("postcondition")
     if postcondition is None:
         return None
@@ -132,6 +135,31 @@ def _check_postcondition(step: dict, mcp: MCPClient) -> EvalScore | None:
     expect_empty = postcondition.get("expect_empty", False)
     expect_error = postcondition.get("expect_error", False)
 
+    max_attempts = 3
+    wait_between = 10  # seconds
+
+    for attempt in range(max_attempts):
+        result = _run_postcondition_check(
+            mcp, tool, args, expect_contains, expect_empty, expect_error
+        )
+        if result.passed or attempt == max_attempts - 1:
+            return result
+        # Retry on failure (propagation delay)
+        click.echo(f"      ⏳ Postcondition retry {attempt + 1}/{max_attempts - 1} (waiting {wait_between}s)...")
+        time.sleep(wait_between)
+
+    return result  # Should not reach here
+
+
+def _run_postcondition_check(
+    mcp: MCPClient,
+    tool: str,
+    args: dict,
+    expect_contains: list[str],
+    expect_empty: bool,
+    expect_error: bool,
+) -> EvalScore:
+    """Single attempt at a postcondition check."""
     try:
         result = mcp.call_tool(tool, args)
         response_text = json.dumps(result.get("result", "")).lower()
